@@ -34,7 +34,7 @@ import fileops
 from backends import Backend, BackendError, FailSafeTriggered, Monitor, WindowInfo
 from fileops import FileError
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 PAUSED_MSG = ("Paused by the user: the user triggered the emergency stop (mouse moved to the top-left corner of the main display). "
               "Stop all actions immediately and tell the user; the Agent can only be resumed by restarting it on the Mac.")

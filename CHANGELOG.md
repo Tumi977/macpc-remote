@@ -2,6 +2,13 @@
 
 This project follows semantic versioning (0.x: interfaces may still change).
 
+### 0.1.1
+
+- Fix: the approval panel's window level was reset to "floating" (3) by `setFloatingPanel_`, so menus, Spotlight and other panels could cover it. It is now set afterwards (screen-saver level, verified on a real Mac); regression test added.
+- Skill: commands in Terminal are typed into a new window (`cmd+n`) pinned with `expect_handle`, because activating Terminal usually lands in the Agent's or the tunnel's window (found in live testing; `expect_app` alone cannot tell Terminal windows apart).
+- Permission hints now say that the Agent must be restarted after granting Accessibility too (macOS 12).
+- New `bin/functional_test.py`: an automated functional test round on a real Mac (53 checks).
+
 ### 0.1.0
 
 First release: the macOS port of WinPC Remote 0.4.0.
