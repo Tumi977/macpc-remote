@@ -1,0 +1,388 @@
+"""Binary file transfer: chunked read/write primitives, authorization and blocking, audit redaction, and macpc_cp.py end to end over real HTTP. No Mac needed."""
+import base64
+import hashlib
+import importlib.util
+import json
+import os
+import socket
+import threading
+import time
+from pathlib import Path
+
+import pytest
+import uvicorn
+
+import fileops
+from backends import FakeBackend
+from fileops import FileError
+from macpc_agent import Config, MacPCAgent, create_app
+
+ROOT = Path(__file__).resolve().parent.parent
+_spec = importlib.util.spec_from_file_location("macpc_cp", ROOT / "claude-plugin/macpc/scripts/macpc_cp.py")
+macpc_cp = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(macpc_cp)
+
+TOKEN = "transfer-test-token-" + "x" * 24
+B64 = lambda b: base64.b64encode(b).decode()  # noqa: E731
+sha = lambda b: hashlib.sha256(b).hexdigest()  # noqa: E731
+
+
+def make(tmp_path, **cfg):
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    cfg.setdefault("file_roots", [str(tmp_path / "docs")])
+    fb = FakeBackend()
+    agent = MacPCAgent(Config(log_dir=str(tmp_path / "logs"), settle_ms=0, **cfg), fb)
+    return agent, fb, tmp_path / "docs"
+
+
+def js(r):
+    assert not r.is_error, r.content[0].text
+    return json.loads(r.content[0].text)
+
+
+def err(r):
+    assert r.is_error
+    return r.content[0].text
+
+
+BLOB = bytes(range(256)) * 40 + b"\x00\x00\xff\xfe" + os.urandom(3000)   # binary with NUL and non-UTF-8 bytes
+
+
+# ----------------------------- primitives: chunked write ----------------------------- #
+async def test_put_multi_chunk_roundtrip_with_hash(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="all")
+    dst = str(docs / "bin.dat")
+    parts = [BLOB[i:i + 4000] for i in range(0, len(BLOB), 4000)]
+    off = 0
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        r = js(await agent.put_file(dst, B64(part), offset=off, final=last,
+                                    expected_size=len(BLOB) if last else None,
+                                    expected_sha256=sha(BLOB) if last else None))
+        off += len(part)
+        assert r["done"] is last
+    assert (docs / "bin.dat").read_bytes() == BLOB
+    assert r["sha256"] == sha(BLOB) and r["size"] == len(BLOB)
+    assert not list(docs.glob(".*macpc-part")), "the temp file must have been replaced atomically"
+
+
+async def test_put_empty_file(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="all")
+    r = js(await agent.put_file(str(docs / "empty.bin"), ""))
+    assert r["size"] == 0 and (docs / "empty.bin").read_bytes() == b""
+
+
+async def test_put_requires_matching_offset_and_supports_resume(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="all")
+    dst = str(docs / "r.bin")
+    js(await agent.put_file(dst, B64(BLOB[:1000]), offset=0, final=False))
+    assert "offset=1000" in err(await agent.put_file(dst, B64(BLOB[2000:]), offset=2000))      # skipping a chunk is refused
+    assert "does not match" in err(await agent.put_file(dst, B64(BLOB[500:]), offset=500))     # going backwards is refused too
+    st = js(await agent.stat_file(dst))                                                         # the target does not exist yet, but the resume position can be found
+    assert st["exists"] is False and st["partial_upload_size"] == 1000
+    js(await agent.put_file(dst, B64(BLOB[1000:]), offset=1000, final=True, expected_sha256=sha(BLOB)))
+    assert (docs / "r.bin").read_bytes() == BLOB
+
+
+async def test_offset_zero_restarts_upload(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="all")
+    dst = str(docs / "s.bin")
+    js(await agent.put_file(dst, B64(b"OLD-GARBAGE"), offset=0, final=False))
+    js(await agent.put_file(dst, B64(b"new"), offset=0, final=True))
+    assert (docs / "s.bin").read_bytes() == b"new"
+
+
+@pytest.mark.parametrize("kw,expect", [({"expected_sha256": "0" * 64}, "sha256 mismatch"), ({"expected_size": 1}, "Size mismatch")])
+async def test_integrity_mismatch_discards_and_never_creates_target(tmp_path, kw, expect):
+    agent, _, docs = make(tmp_path, approval_mode="all")
+    assert expect in err(await agent.put_file(str(docs / "x.bin"), B64(b"hello"), **kw))
+    assert not (docs / "x.bin").exists() and not list(docs.glob(".*macpc-part"))
+
+
+async def test_overwrite_protection_backup_and_original_kept_on_failure(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="all")
+    f = docs / "keep.bin"
+    f.write_bytes(b"ORIGINAL")
+    assert "already exists" in err(await agent.put_file(str(f), B64(b"new")))
+    assert f.read_bytes() == b"ORIGINAL"
+    err(await agent.put_file(str(f), B64(b"new"), overwrite=True, expected_sha256="0" * 64))   # a failed verification must not damage the original file
+    assert f.read_bytes() == b"ORIGINAL"
+    r = js(await agent.put_file(str(f), B64(b"new"), overwrite=True))
+    assert f.read_bytes() == b"new" and Path(r["backup"]).read_bytes() == b"ORIGINAL"
+
+
+async def test_put_input_validation(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="all", transfer_max_bytes=10)
+    assert "base64" in err(await agent.put_file(str(docs / "a"), "###not-b64###"))
+    assert "transfer limit" in err(await agent.put_file(str(docs / "a"), B64(b"x" * 11)))
+    assert "is a directory" in err(await agent.put_file(str(docs), B64(b"x")))
+    assert "does not exist" in err(await agent.put_file(str(docs / "no" / "a"), B64(b"x")))
+    js(await agent.put_file(str(docs / "no" / "a"), B64(b"x"), create_dirs=True))
+    assert "must not exceed" in err(await agent.put_file(str(docs / "b"), B64(b"x" * (fileops.MAX_CHUNK_BYTES + 1))))
+    assert "must not be negative" in err(await agent.put_file(str(docs / "b"), B64(b"x"), offset=-1))
+
+
+# ----------------------------- primitives: chunked read / stat ----------------------------- #
+async def test_get_chunks_reassemble_binary_and_stat_hash(tmp_path):
+    agent, _, docs = make(tmp_path)
+    (docs / "b.bin").write_bytes(BLOB)
+    st = js(await agent.stat_file(str(docs / "b.bin"), sha256=True))
+    assert st["size"] == len(BLOB) and st["sha256"] == sha(BLOB)
+    got, off = b"", 0
+    while True:
+        r = js(await agent.get_file(str(docs / "b.bin"), offset=off, length=5000))
+        got += base64.b64decode(r["data_b64"])
+        off += r["length"]
+        if r["eof"]:
+            break
+    assert got == BLOB
+
+
+async def test_get_errors(tmp_path):
+    agent, _, docs = make(tmp_path)
+    (docs / "a.bin").write_bytes(b"abc")
+    assert "does not exist" in err(await agent.get_file(str(docs / "none.bin")))
+    assert "is a directory" in err(await agent.get_file(str(docs)))
+    assert "beyond" in err(await agent.get_file(str(docs / "a.bin"), offset=99))
+    assert "length" in err(await agent.get_file(str(docs / "a.bin"), length=0))
+    agent2, _, docs2 = make(tmp_path / "t2", transfer_max_bytes=2)
+    (docs2 / "big.bin").write_bytes(b"abc")
+    assert "transfer limit" in err(await agent2.get_file(str(docs2 / "big.bin")))
+
+
+# ----------------------------- authorization and blocking (same gate as the file tools) ----------------------------- #
+async def test_put_prompts_once_per_dir_and_denial_changes_nothing(tmp_path):
+    agent, fb, docs = make(tmp_path)
+    fb.confirm_result = False
+    assert "denied" in err(await agent.put_file(str(docs / "a.bin"), B64(b"x")))
+    assert not (docs / "a.bin").exists() and not list(docs.glob(".*part"))
+    fb.confirm_result = True
+    js(await agent.put_file(str(docs / "a.bin"), B64(b"x")))
+    js(await agent.put_file(str(docs / "b.bin"), B64(b"y")))
+    assert len([c for c in fb.confirm_calls if "File approval" in c[0]]) == 2   # one denial + one approval; after approval the same directory is not asked again
+
+
+async def test_allowlist_rejects_put_but_reads_in_roots_work(tmp_path):
+    agent, fb, docs = make(tmp_path, approval_mode="allowlist")
+    (docs / "r.bin").write_bytes(b"data")
+    assert "allowlist" in err(await agent.put_file(str(docs / "w.bin"), B64(b"x")))
+    js(await agent.get_file(str(docs / "r.bin")))
+    assert not fb.confirm_calls
+
+
+async def test_pause_blocks_put_but_not_get(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="all")
+    (docs / "r.bin").write_bytes(b"data")
+    agent.paused = True
+    assert "Paused" in err(await agent.put_file(str(docs / "w.bin"), B64(b"x")))
+    js(await agent.get_file(str(docs / "r.bin")))
+
+
+@pytest.mark.parametrize("mode", ["all", "prompt"])
+async def test_get_cannot_exfiltrate_private_keys_or_credentials(tmp_path, mode):
+    """The download tool must not become a side channel for reading private keys/credentials, even with approval_mode=all or after the user clicked "Yes"."""
+    agent, fb, docs = make(tmp_path, approval_mode=mode)
+    fb.confirm_result = True
+    key = tmp_path / "ssh" / "myserver"
+    key.parent.mkdir()
+    key.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nSECRETBYTES\n-----END OPENSSH PRIVATE KEY-----\n")
+    (docs / ".env").write_text("TOKEN=abc")
+    for p in (key, docs / ".env"):
+        r = await agent.get_file(str(p))
+        assert r.is_error and "SECRETBYTES" not in r.content[0].text and "abc" not in r.content[0].text
+        assert (await agent.stat_file(str(p))).is_error
+    # a binary file whose header contains a private key is blocked too
+    blob = tmp_path / "docs" / "x.bin"
+    blob.write_bytes(b"\x00\x01" + key.read_bytes())
+    assert (await agent.get_file(str(blob))).is_error
+
+
+async def test_put_blocked_paths_and_executables_even_in_all_mode(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="all")
+    for name in ("install.pkg", "run.command", "x.sh", "a.webloc", "s.scpt"):
+        assert "not allowed" in err(await agent.put_file(str(docs / name), B64(b"MZ")))
+        assert not (docs / name).exists()
+    assert err(await agent.put_file(str(tmp_path / ".ssh" / "authorized_keys"), B64(b"x"), create_dirs=True))
+    here = os.path.dirname(os.path.abspath(__import__("macpc_agent").__file__))
+    assert "Agent's own directory" in err(await agent.put_file(os.path.join(here, "evil.py"), B64(b"x")))
+    assert not os.path.exists(os.path.join(here, "evil.py"))
+
+
+async def test_symlink_part_and_symlink_target_are_not_followed_out(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="prompt")
+    agent  # noqa: B018
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "victim.txt"
+    victim.write_text("keep")
+    os.symlink(victim, docs / "link.bin")           # the target is a symlink pointing outside roots
+    fb = agent.backend
+    fb.confirm_result = False
+    r = await agent.put_file(str(docs / "link.bin"), B64(b"PWN"), overwrite=True)
+    assert victim.read_text() == "keep"             # it resolves to a real path in another directory, which needs user approval; refused
+    assert r.is_error
+
+
+async def test_audit_never_logs_binary_payload(tmp_path):
+    agent, _, docs = make(tmp_path, approval_mode="all")
+    payload = B64(b"TOP-SECRET-BYTES" * 50)
+    js(await agent.put_file(str(docs / "a.bin"), payload))
+    raw = (tmp_path / "logs" / "actions.jsonl").read_text(encoding="utf-8")
+    assert payload not in raw and "TOP-SECRET" not in raw
+    entry = json.loads(raw.splitlines()[-1])
+    assert entry["tool"] == "put_file" and entry["params"]["data_b64_len"] == len(payload)
+    assert entry["process"].startswith("file:")
+
+
+async def test_file_tools_disabled_blocks_transfer(tmp_path):
+    agent, _, docs = make(tmp_path, file_tools_enabled=False)
+    assert "disabled" in err(await agent.put_file(str(docs / "a"), B64(b"x")))
+    assert "disabled" in err(await agent.get_file(str(docs / "a")))
+
+
+# ----------------------------- end to end: macpc_cp.py over real HTTP ----------------------------- #
+@pytest.fixture
+def live(tmp_path):
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    (tmp_path / "docs").mkdir()
+    fb = FakeBackend()
+    cfg = Config(port=port, token=TOKEN, log_dir=str(tmp_path / "logs"), settle_ms=0,
+                 approval_mode="all", file_roots=[str(tmp_path / "docs")])
+    app, agent = create_app(cfg, fb)
+    srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    t = threading.Thread(target=srv.run, daemon=True)
+    t.start()
+    deadline = time.time() + 10
+    while not srv.started:
+        assert time.time() < deadline
+        time.sleep(0.05)
+    yield f"http://127.0.0.1:{port}/mcp", tmp_path
+    srv.should_exit = True
+    t.join(timeout=10)
+
+
+def test_cli_upload_download_roundtrip_multi_chunk(live):
+    url, tmp = live
+    big = os.urandom(3 * 1024 * 1024 + 123)          # 3 chunks + a remainder, with plenty of non-UTF-8 bytes
+    src = tmp / "src.bin"
+    src.write_bytes(big)
+    c = macpc_cp.McpClient(url, TOKEN)
+    r = macpc_cp.put(c, str(src), str(tmp / "docs") + os.sep, quiet=True)          # directory form: the file name is kept
+    assert r["size"] == len(big) and r["sha256"] == sha(big)
+    assert (tmp / "docs" / "src.bin").read_bytes() == big
+    out = macpc_cp.get(c, str(tmp / "docs" / "src.bin"), str(tmp / "dl") + os.sep, quiet=True, chunk=700_000)
+    assert Path(out["path"]).read_bytes() == big and out["sha256"] == sha(big)
+    assert not list((tmp / "dl").glob("*.macpc-part"))
+
+
+def test_cli_main_exit_codes_and_no_token_in_args(live, monkeypatch, capsys):
+    url, tmp = live
+    f = tmp / "a.txt"
+    f.write_text("hi")
+    monkeypatch.setenv("MACPC_TOKEN", TOKEN)
+    assert macpc_cp.main(["--url", url, "-q", "put", str(f), str(tmp / "docs" / "a.txt")]) == 0
+    assert json.loads(capsys.readouterr().out)["size"] == 2
+    assert macpc_cp.main(["--url", url, "-q", "put", str(f), str(tmp / "docs" / "a.txt")]) == 1     # already exists
+    assert "already exists" in capsys.readouterr().err
+    assert macpc_cp.main(["--url", url, "-q", "put", "--overwrite", str(f), str(tmp / "docs" / "a.txt")]) == 0
+    assert macpc_cp.main(["--url", url, "-q", "stat", "--sha256", str(tmp / "docs" / "a.txt")]) == 0
+    monkeypatch.setenv("MACPC_TOKEN", "wrong")
+    assert macpc_cp.main(["--url", url, "-q", "stat", str(tmp / "docs" / "a.txt")]) == 1
+    assert "401" in capsys.readouterr().err
+    monkeypatch.delenv("MACPC_TOKEN")
+    assert macpc_cp.main(["--url", url, "stat", "x"]) == 2
+
+
+def test_cli_resume_after_interrupted_upload(live):
+    url, tmp = live
+    data = os.urandom(2_500_000)
+    src = tmp / "big.bin"
+    src.write_bytes(data)
+    c = macpc_cp.McpClient(url, TOKEN)
+    dst = str(tmp / "docs" / "big.bin")
+    first = 1_000_000
+    c.call("put_file", path=dst, data_b64=B64(data[:first]), offset=0, final=False)     # simulate a transfer that broke off halfway
+    r = macpc_cp.put(c, str(src), dst, resume=True, quiet=True)
+    assert r["sha256"] == sha(data) and (tmp / "docs" / "big.bin").read_bytes() == data
+
+
+def test_cli_refuses_to_download_private_key(live):
+    url, tmp = live
+    key = tmp / "docs" / "id_whatever"
+    key.write_text("-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n")
+    c = macpc_cp.McpClient(url, TOKEN)
+    with pytest.raises(macpc_cp.TransferError, match="private key|sensitive"):
+        macpc_cp.get(c, str(key), str(tmp / "out.key"), quiet=True)
+    assert not (tmp / "out.key").exists()
+
+
+def test_cli_closes_its_mcp_session_so_the_agent_does_not_accumulate_them(live):
+    """Found on a real machine: every run left an unclosed session and flooded the Agent console. The session must now be DELETEd on exit."""
+    import urllib.request
+    url, tmp = live
+    c = macpc_cp.McpClient(url, TOKEN)
+    sid = c.headers["Mcp-Session-Id"]
+    c.close()
+    assert "Mcp-Session-Id" not in c.headers
+
+    def post_with(session):
+        req = urllib.request.Request(url, method="POST", data=json.dumps(
+            {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "get_status", "arguments": {}}}).encode(),
+            headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json",
+                     "Accept": "application/json, text/event-stream", "Mcp-Session-Id": session,
+                     "MCP-Protocol-Version": "2025-06-18"})
+        try:
+            return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=10).status
+        except urllib.error.HTTPError as e:
+            return e.code
+    assert post_with(sid) == 404, "after the session is closed, the old session ID must no longer be usable"
+
+
+def test_cli_main_uses_a_closing_session(live, monkeypatch, capsys):
+    url, tmp = live
+    closed = []
+    real_close = macpc_cp.McpClient.close
+    monkeypatch.setattr(macpc_cp.McpClient, "close", lambda self: (closed.append(1), real_close(self))[1])
+    monkeypatch.setenv("MACPC_TOKEN", TOKEN)
+    f = tmp / "a.txt"
+    f.write_text("hi")
+    assert macpc_cp.main(["--url", url, "-q", "put", str(f), str(tmp / "docs" / "a.txt")]) == 0
+    assert macpc_cp.main(["--url", url, "-q", "stat", str(tmp / "docs" / "nope")]) == 1     # the error path must close the session too
+    assert len(closed) == 2
+
+
+def _serve_once(handler):
+    """Start a fake server that answers only once, to produce various network faults."""
+    import socketserver
+    class H(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.recv(65536)
+            handler(self.request)
+    srv = socketserver.TCPServer(("127.0.0.1", 0), H)
+    t = threading.Thread(target=srv.handle_request, daemon=True)
+    t.start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}/mcp"
+
+
+@pytest.mark.parametrize("fault", ["close", "truncated_chunked", "refused"])
+def test_cli_network_faults_become_clean_errors_not_tracebacks(fault, monkeypatch, capsys):
+    """Real-world scenario: the tunnel port is listening, but the Agent on the Mac is gone -> the connection is closed at once / the response is truncated."""
+    monkeypatch.setenv("MACPC_TOKEN", TOKEN)
+    if fault == "close":
+        srv, url = _serve_once(lambda sock: None)                                   # close as soon as the request arrives
+    elif fault == "truncated_chunked":
+        srv, url = _serve_once(lambda sock: sock.sendall(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: text/event-stream\r\n\r\n"))
+    else:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            url = f"http://127.0.0.1:{s.getsockname()[1]}/mcp"                      # nobody is listening
+        srv = None
+    rc = macpc_cp.main(["--url", url, "-q", "stat", "x"])
+    err = capsys.readouterr().err
+    assert rc == 1 and "Error:" in err and "Traceback" not in err
+    assert ("Agent" in err) or ("Cannot reach" in err)
+    if srv:
+        srv.server_close()

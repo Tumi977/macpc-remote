@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "macpc": {
+      "type": "http",
+      "url": "${MACPC_URL:-http://127.0.0.1:8766/mcp}",
+      "headers": { "Authorization": "Bearer ${MACPC_TOKEN}" }
+    }
+  }
+}

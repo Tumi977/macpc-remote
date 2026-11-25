@@ -1,0 +1,7 @@
+{
+  "server": "your.server.example.com",
+  "user": "macpc-tunnel",
+  "key_file": "~/.ssh/macpc_tunnel_ed25519",
+  "ssh_port": 22,
+  "port": 8766
+}

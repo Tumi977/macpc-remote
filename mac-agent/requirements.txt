@@ -1,0 +1,6 @@
+mcp>=2.3,<3
+pillow
+uvicorn
+pyobjc-framework-Quartz; sys_platform == "darwin"
+pyobjc-framework-Cocoa; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices; sys_platform == "darwin"

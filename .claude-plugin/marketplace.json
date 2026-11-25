@@ -1,0 +1,14 @@
+{
+  "name": "macpc-remote",
+  "owner": {
+    "name": "MacPC Remote contributors"
+  },
+  "description": "MacPC Remote: lets Claude Code on a remote Linux machine operate a Mac through screenshots + keyboard/mouse",
+  "plugins": [
+    {
+      "name": "macpc",
+      "source": "./claude-plugin/macpc",
+      "description": "Operate a Mac remotely through the macpc MCP server (continuous screenshots + keyboard/mouse + file read/write)"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# Local config and credentials -- must never be committed
+mac-agent/config.json
+mac-agent/mac-remote.config.json
+*.key
+*.pem
+id_rsa*
+id_ed25519*
+.env
+.env.*
+
+# Run artifacts
+mac-agent/logs/
+mac-agent/.venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
