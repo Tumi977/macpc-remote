@@ -346,6 +346,18 @@ MACPC_TOKEN=… .venv/bin/python mac-agent/bin/live_test.py
 
 It opens TextEdit through Spotlight, types Chinese/English/emoji (keys and paste), exercises every desktop tool inside that window, and quits TextEdit without saving. It refuses to start if TextEdit already has windows open.
 
+### Functional test round (real Mac, fully automatic)
+
+Realistic tasks, each verified rather than just "no error": TextEdit through Spotlight with keys + paste input and the save
+sheet's "Go to folder", byte-exact read-back; the file tools and ten things that must be refused; transfer with an
+interrupted and resumed upload and sha256 on both sides; a Chrome window; the block-list and the wrong-window guard in
+bypass mode; connection reuse after idling and a killed-and-restored tunnel. Needs the agent in bypass mode and SSH access
+to the Mac (only for creating/removing the scratch folder `~/macpc-test` and for killing the tunnel):
+
+```bash
+MACPC_TOKEN=… MACPC_SSH=user@mac .venv/bin/python mac-agent/bin/functional_test.py [--shots /tmp/shots]
+```
+
 ### Manual acceptance checklist
 
 1. With Pinyin (or another input method) active, `type_text` of mixed Chinese/English/emoji is exact, and the input method is restored afterwards.
