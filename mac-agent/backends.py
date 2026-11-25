@@ -415,8 +415,8 @@ class MacBackend(Backend):
         if not self.AS.AXIsProcessTrusted():
             raise BackendError(
                 f"macOS Accessibility permission is missing, so mouse/keyboard events would be silently dropped. "
-                f"Ask the user to enable '{self._host_app}' under System Settings > Privacy & Security > Accessibility, "
-                "then retry (no restart is needed for this one).")
+                f"Ask the user to enable '{self._host_app}' under System Settings > Privacy & Security > Accessibility "
+                "and then restart the Agent (on macOS 12 a running process does not see the change).")
 
     # -- screenshots --
     @_with_pool

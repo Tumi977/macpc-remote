@@ -769,7 +769,7 @@ class MacPCAgent:
                 text += "\n" + NO_SCREEN_RECORDING_HINT.format(app=self.backend.host_app())
             if perms.get("accessibility") is False:
                 text += (f"\n(Warning: Accessibility permission is missing, so every mouse/keyboard tool will fail. Ask the user to enable "
-                         f"'{self.backend.host_app()}' under System Settings > Privacy & Security > Accessibility.)")
+                         f"'{self.backend.host_app()}' under System Settings > Privacy & Security > Accessibility and restart the Agent.)")
             return text, None
         return await self.run("get_status", {}, body, input_tool=False)
 
@@ -967,7 +967,8 @@ def _print_permissions(backend: Backend) -> None:
     print("!" * 64)
     print(f"macOS permission(s) missing for '{app}': {', '.join(missing)}")
     print("Open System Settings > Privacy & Security, enable the app in each list above,")
-    print("then quit and restart this Agent (Screen Recording only takes effect after a restart).")
+    print("then restart this Agent (a running process does not pick up the change; granting Screen Recording")
+    print("may also make macOS quit Terminal: just run mac-remote.sh on / start-agent.sh again).")
     print("!" * 64)
 
 

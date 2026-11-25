@@ -107,8 +107,9 @@ cd ~/macpc-remote/mac-agent
 
 macOS attributes the permissions of a command-line program to the app that started it, so you grant them to **Terminal** (or iTerm, …):
 
-1. **System Settings → Privacy & Security → Accessibility** (macOS 12: System Preferences → Security & Privacy → Privacy): enable **Terminal**. Without it every mouse/keyboard event is silently dropped; the agent detects this and returns a clear error.
-2. **… → Screen Recording**: enable **Terminal**, then **quit and restart the agent** (this permission only takes effect in a new process). Without it macOS hides every other app's windows: screenshots show only the wallpaper and the menu bar.
+1. **System Settings → Privacy & Security → Accessibility** (macOS 12: System Preferences → Security & Privacy → Privacy; click the padlock first): enable **Terminal**. Without it every mouse/keyboard event is silently dropped; the agent detects this and returns a clear error.
+2. **… → Screen Recording**: enable **Terminal**. Without it macOS hides every other app's windows: screenshots show only the wallpaper and the menu bar.
+3. **Restart the agent** (`./mac-remote.sh on`). A running process does not pick up either change (observed for both permissions on macOS 12). When you enable Screen Recording, macOS may offer to quit Terminal: that also stops the agent and the tunnel, so just run `mac-remote.sh on` again.
 
 The agent asks macOS to show both prompts at start-up, prints which permission is missing, and `get_status` reports `permissions` and `permission_holder_app`.
 
@@ -367,8 +368,10 @@ It opens TextEdit through Spotlight, types Chinese/English/emoji (keys and paste
 | Connection refused | Agent or tunnel not running; `curl -i http://127.0.0.1:8766/mcp` on the server should give 401 |
 | `remote port forwarding failed` | Port 8766 still held on the server by a stale connection (wait or use another `-R` port), or `permitlisten` does not match |
 | Screenshots show only the wallpaper and menu bar | Screen Recording not granted to the app that started the agent, or the agent was not restarted after granting |
-| "Accessibility permission is missing" | Enable that app under Privacy & Security → Accessibility (no restart needed). If it is enabled but still refused, remove and re-add it (the entry can go stale after the app updates) |
+| "Accessibility permission is missing" | Enable that app under Privacy & Security → Accessibility, then **restart the agent** (a running process keeps the old answer). If it is enabled and the agent was restarted but it is still refused, uncheck and re-check it (the entry can go stale after the app updates) |
 | A Pinyin candidate window appears while typing | `switch_input_source` is off, or no ASCII-capable layout (ABC / U.S.) is enabled; add "ABC" in Keyboard → Input Sources |
+| Typed text differs slightly (`line` became `Line`, quotes became curly) | The app's own text substitutions (auto-capitalization, smart quotes, auto-correct) act on typed keys. Use `type_text(method="paste")` for exact text, or turn them off in the app / Keyboard → Text |
+| Many Terminal windows pile up | Each `mac-remote.sh on` opens new windows; the old ones stay open with a finished shell. Close them, or set Terminal → Settings → Profiles → Shell → "When the shell exits: Close the window" |
 | Clicks are offset | Take a fresh screenshot first (coordinates must come from the latest one, never from `zoom`) |
 | Black screenshot / "screen is locked" | Unlock the Mac; disable display sleep / auto-lock for unattended use |
 | `start-agent.sh` fails building `cryptography` (or another package) | No prebuilt wheel for your macOS/CPU; the script already prefers wheels. Install `uv` (`curl -LsSf https://astral.sh/uv/install.sh \| sh`) and rerun, or install Rust |
