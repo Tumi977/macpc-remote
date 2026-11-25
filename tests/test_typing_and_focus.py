@@ -576,3 +576,11 @@ def test_mac_backend_refuses_other_platforms(monkeypatch):
 def test_config_defaults():
     c = Config()
     assert (c.type_chunk_chars, c.type_delay_ms, c.switch_input_source) == (1, 5, True)
+
+
+def test_dialog_level_is_set_after_floating_panel():
+    """setFloatingPanel_(True) resets the window level to NSFloatingWindowLevel (3); set before it, the screen-saver
+    level was lost and menus / Spotlight could cover the approval panel (found in live testing)."""
+    src = open(backends.__file__, encoding="utf-8").read()
+    body = src[src.index("def run_confirm_dialog"):]
+    assert body.index("panel.setFloatingPanel_(True)") < body.index("panel.setLevel_(AppKit.NSScreenSaverWindowLevel)")

@@ -1079,9 +1079,11 @@ def run_confirm_dialog(title: str, message: str, timeout_s: float) -> bool:
     panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
         ((0, 0), (width, 200)), style, AppKit.NSBackingStoreBuffered, False)
     panel.setTitle_("⚠ " + title)
-    panel.setLevel_(AppKit.NSScreenSaverWindowLevel)          # above menus, Spotlight and full-screen apps
     panel.setFloatingPanel_(True)
     panel.setHidesOnDeactivate_(False)
+    # After setFloatingPanel_: that call resets the level to NSFloatingWindowLevel (3), where menus, Spotlight and
+    # other panels cover the dialog (found in live testing). Above menus, Spotlight and full-screen apps:
+    panel.setLevel_(AppKit.NSScreenSaverWindowLevel)
     panel.setBecomesKeyOnlyIfNeeded_(True)
     panel.setCollectionBehavior_(AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
                                  | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
