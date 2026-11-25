@@ -26,15 +26,44 @@ elif [ "$MODE" != off ]; then
     exit 1
 fi
 
+close_windows() {   # close the Terminal windows whose tab runs on one of the given ttys (the old agent/tunnel windows)
+    [ $# -gt 0 ] || return 0
+    osascript - "$@" >/dev/null 2>&1 <<'AS' || true
+on run argv
+    tell application "Terminal"
+        set ids to {}
+        repeat with w in windows
+            try
+                if argv contains (tty of selected tab of w) then set end of ids to id of w
+            end try
+        end repeat
+        repeat with i in ids
+            try
+                close (first window whose id is i)
+            end try
+        end repeat
+    end tell
+end run
+AS
+}
+
 stop_all() {
-    local n=0
+    local n=0 ttys="" t me
+    me="$(tty 2>/dev/null || true)"
     # the reconnect loops first (otherwise the tunnel would come back after 5 s), then the agent and ssh
     for pat in "start-tunnel.sh" "start-agent.sh" "macpc_agent.py" "ssh -N -R 127.0.0.1:${PORT}:"; do
         for pid in $(pgrep -f -- "$pat" || true); do
             [ "$pid" = "$$" ] && continue
+            t="$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')"
+            case "$t" in ""|"??") ;; *) [ "/dev/$t" != "$me" ] && ttys="$ttys /dev/$t" ;; esac
             kill "$pid" 2>/dev/null && n=$((n + 1))
         done
     done
+    if [ -n "$ttys" ]; then
+        sleep 0.5
+        # shellcheck disable=SC2086
+        close_windows $(printf '%s\n' $ttys | sort -u)
+    fi
     echo "$n"
 }
 
@@ -61,10 +90,11 @@ AGENT_ARGS=""
 term() {   # open a new Terminal window running the given command
     osascript -e "tell application \"Terminal\" to do script \"$1\"" >/dev/null
 }
-term "cd '$HERE' && ./start-agent.sh $AGENT_ARGS"
-term "cd '$HERE' && ./start-tunnel.sh $TUNNEL_ARGS -P $PORT"
+# "; exit 0": when the agent/tunnel is stopped, the shell ends too, so the window can be closed without a prompt
+term "cd '$HERE' && ./start-agent.sh $AGENT_ARGS; exit 0"
+term "cd '$HERE' && ./start-tunnel.sh $TUNNEL_ARGS -P $PORT; exit 0"
 
 label="normal (unapproved apps show a confirmation dialog)"
 [ "$MODE" = bypass ] && label="bypass (approval prompts skipped)"
 echo "Started the Agent and the tunnel in two Terminal windows, mode: $label. Keep them open."
-echo "To stop: $HERE/mac-remote.sh off"
+echo "To stop: mac-remote-off   (or $HERE/mac-remote.sh off)"

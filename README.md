@@ -141,12 +141,15 @@ To find an app's bundle id: `osascript -e 'id of app "TextEdit"'`, or look at th
 
 ```bash
 cp mac-remote.config.example.json mac-remote.config.json    # then edit it
-./mac-remote.sh on       # opens two Terminal windows: agent + tunnel
+./mac-remote.sh on       # opens two Terminal windows: agent + tunnel (old ones are closed)
 ./mac-remote.sh bypass   # same, but without approval dialogs (block-lists still apply)
 ./mac-remote.sh off      # stops both
 ```
 
 `bin/mac-remote-on.command` (and `-bypass`, `-off`) do the same on a double-click in Finder.
+
+Short commands, like `win-remote-on` on Windows: run `./install-commands.sh` once; afterwards `mac-remote-on`,
+`mac-remote-bypass` and `mac-remote-off` work in any terminal (they are installed into `~/.local/bin`).
 
 `mac-remote.config.json` either names the server:
 
