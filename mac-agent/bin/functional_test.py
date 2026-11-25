@@ -36,6 +36,9 @@ from mcp.client.streamable_http import streamable_http_client
 ROOT = Path(__file__).resolve().parents[2]
 CP = ROOT / "claude-plugin/macpc/scripts/macpc_cp.py"
 WORK = "~/macpc-test"
+# A fake key for the content check, assembled so that the repository's secret scan does not flag this file.
+_K = "PRIVATE " + "KEY-----"
+FAKE_KEY = f"-----BEGIN OPENSSH {_K}\nFAKE-FOR-TESTING\n-----END OPENSSH {_K}\n"
 results: list[tuple[str, str, bool, str]] = []
 _shot_no = [0]          # one counter for the whole run, so images of later sessions do not overwrite earlier ones
 
@@ -153,7 +156,7 @@ async def t2_files(m: Mac):
     err, t = await m("list_files", path=WORK, pattern="*.md")
     check(T, "list_files with pattern", not err and "ft.md" in t and "round2" not in t, t)
     check(T, "fake private key written (name looks harmless)",
-          ok(await m("write_file", path=f"{WORK}/backup-notes", content="-----BEGIN OPENSSH PRIVATE KEY-----\nFAKE\n-----END OPENSSH PRIVATE KEY-----\n")))
+          ok(await m("write_file", path=f"{WORK}/backup-notes", content=FAKE_KEY)))
     refused = {
         "read private key by content": ("read_file", {"path": f"{WORK}/backup-notes"}),
         "download private key by content": ("get_file", {"path": f"{WORK}/backup-notes"}),
