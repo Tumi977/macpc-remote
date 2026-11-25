@@ -1,6 +1,6 @@
 {
   "name": "macpc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Lets Claude Code on a remote Linux machine view and operate a Mac through macpc-agent (screenshots, clicks, typing, key presses) and read/write local files",
   "author": { "name": "MacPC Remote contributors" },
   "license": "MIT",

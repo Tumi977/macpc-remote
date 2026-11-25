@@ -34,7 +34,7 @@ import fileops
 from backends import Backend, BackendError, FailSafeTriggered, Monitor, WindowInfo
 from fileops import FileError
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 PAUSED_MSG = ("Paused by the user: the user triggered the emergency stop (mouse moved to the top-left corner of the main display). "
               "Stop all actions immediately and tell the user; the Agent can only be resumed by restarting it on the Mac.")
@@ -83,7 +83,9 @@ class Config:
     transfer_max_bytes: int = fileops.DEFAULT_TRANSFER_MAX_BYTES     # per-file limit for get_file / put_file
     # type_text pacing: one batch per type_chunk_chars characters, type_delay_ms milliseconds between batches.
     type_chunk_chars: int = 1
-    type_delay_ms: float = 5
+    # 30 ms: at 5 ms GitHub's forms in Chrome dropped and reordered characters ("screenshots" -> "sreenshots",
+    # "your Mac" -> "yourMac."); 30 ms was exact in every live run. TextEdit/Terminal cope with less.
+    type_delay_ms: float = 30
     type_newline_delay_ms: float = 60       # wait longer after Return (some apps stall briefly on it)
     paste_restore_delay_ms: float = 600     # with method="paste": wait until the app has read the clipboard before restoring it
     # Switch to an ASCII layout (e.g. ABC) while typing, so an input method such as Pinyin cannot intercept the keys

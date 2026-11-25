@@ -277,7 +277,18 @@ def test_type_text_sends_each_character_as_a_unicode_key_pair(mac):
         ("b", 1, True), ("b", 1, False)]
     real_keys = [(e["code"], e["down"]) for e in mac.Q.posted if e["kind"] == "key" and not e.get("unicode")]
     assert real_keys == [(36, True), (36, False), (48, True), (48, False)]     # Return and Tab are real keys
-    assert all(e["flags"] == 0 for e in mac.Q.posted)                       # no stray modifiers
+    # ASCII goes out with its real key code (web inputs dropped characters when everything was key code 0);
+    # other characters keep key code 0 and rely on the attached Unicode string
+    assert [(e["unicode"], e["code"]) for e in uni if e["down"]] == [("a", 0), ("\u4e2d", 0), ("🙂", 0), ("b", 11)]
+
+
+def test_ascii_characters_use_real_key_codes_and_shift():
+    assert backends.char_keycode("s") == (1, 0)
+    assert backends.char_keycode("S") == (1, 0x20000)
+    assert backends.char_keycode("+") == (24, 0x20000)
+    assert backends.char_keycode(" ") == (49, 0)
+    assert backends.char_keycode("/") == (44, 0)
+    assert backends.char_keycode("\u4e2d") == (0, 0) and backends.char_keycode("é") == (0, 0)
 
 
 def test_type_text_pacing_newline_delay_and_crlf(mac):
@@ -575,7 +586,7 @@ def test_mac_backend_refuses_other_platforms(monkeypatch):
 
 def test_config_defaults():
     c = Config()
-    assert (c.type_chunk_chars, c.type_delay_ms, c.switch_input_source) == (1, 5, True)
+    assert (c.type_chunk_chars, c.type_delay_ms, c.switch_input_source) == (1, 30, True)
 
 
 def test_dialog_level_is_set_after_floating_panel():

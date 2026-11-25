@@ -28,7 +28,7 @@
   "file_tools_enabled": true,
   "transfer_max_bytes": 536870912,
   "type_chunk_chars": 1,
-  "type_delay_ms": 5,
+  "type_delay_ms": 30,
   "type_newline_delay_ms": 60,
   "paste_restore_delay_ms": 600,
   "switch_input_source": true

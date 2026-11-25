@@ -330,6 +330,19 @@ def key_sequence(keys: list[str]) -> list[tuple[int, int]]:
     return seq
 
 
+def char_keycode(ch: str) -> tuple[int, int]:
+    """Character -> (US-layout key code, modifier flags) for printable ASCII; (0, 0) for anything else."""
+    if ch == " ":
+        return KEYCODES["space"], 0
+    if len(ch) == 1 and " " < ch <= "~":
+        try:
+            code, shift = resolve_key(ch)
+        except BackendError:
+            return 0, 0
+        return code, FLAG["shift"] if shift else 0
+    return 0, 0
+
+
 def utf16_units(ch: str) -> int:
     return len(ch.encode("utf-16-le")) // 2
 
@@ -360,7 +373,7 @@ def _with_pool(fn):
 class MacBackend(Backend):
     name = "macos"
 
-    def __init__(self, type_chunk_chars: int = 1, type_delay_ms: float = 5,
+    def __init__(self, type_chunk_chars: int = 1, type_delay_ms: float = 30,
                  type_newline_delay_ms: float = 60, paste_restore_delay_ms: float = 600,
                  switch_input_source: bool = True) -> None:
         self.type_chunk_chars = max(1, int(type_chunk_chars))
@@ -769,10 +782,16 @@ class MacBackend(Backend):
         self._post(ev)
 
     def _unicode(self, ch: str) -> None:
+        """One character as a key press. Printable ASCII goes out with its real key code (and Shift when the US layout
+        needs it); every other character uses key code 0. The Unicode string is attached either way and decides what
+        is inserted. With key code 0 for everything, web pages saw every character as the "A" key (event.code
+        "KeyA"), which can trigger site shortcuts. (Dropped/reordered characters in script-heavy web inputs are a
+        pacing problem, fixed by type_delay_ms, not by the key code.)"""
         Q = self.Q
+        code, flags = char_keycode(ch)
         for down in (True, False):
-            ev = Q.CGEventCreateKeyboardEvent(None, 0, down)
-            Q.CGEventSetFlags(ev, 0)
+            ev = Q.CGEventCreateKeyboardEvent(None, code, down)
+            Q.CGEventSetFlags(ev, flags)
             Q.CGEventKeyboardSetUnicodeString(ev, utf16_units(ch), ch)
             self._post(ev)
 

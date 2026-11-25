@@ -182,7 +182,7 @@ The agent asks macOS to show both prompts at start-up, prints which permission i
 | `file_tools_enabled` / `file_roots` | `true` / Desktop, Documents | File tools; reads inside the roots need no approval |
 | `file_blocked_paths` / `file_blocked_write_ext` | `[]` / `.command .sh .app .pkg .dmg .scpt .workflow .webloc …` | Extra blocked path substrings / extensions that cannot be written |
 | `transfer_max_bytes` | 512 MiB | Per-file limit for `get_file` / `put_file` |
-| `type_delay_ms` / `type_newline_delay_ms` | 5 / 60 | Pacing of `type_text` |
+| `type_delay_ms` / `type_newline_delay_ms` | 30 / 60 | Pacing of `type_text` (faster typing made script-heavy web forms drop or reorder characters) |
 | `paste_restore_delay_ms` | 600 | `method="paste"`: wait before restoring the clipboard |
 | `switch_input_source` | `true` | Switch to an ASCII layout while typing so an input method (Pinyin, Japanese, …) cannot intercept the keys |
 
