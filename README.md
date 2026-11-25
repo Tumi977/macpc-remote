@@ -7,6 +7,8 @@ Let **Claude Code running on a remote Linux server** operate **your Mac** throug
 
 This is the macOS sibling of [WinPC Remote](https://github.com/Tumi977/winpc-remote): same tools, same security model, same Linux-side workflow. The two plugins can be installed side by side (different server names, environment variables and ports: `macpc` / `MACPC_TOKEN` / 8766 vs `winpc` / `WINPC_TOKEN` / 8765).
 
+**Why this one?** Nothing listens on the network (SSH reverse tunnel, loopback only), a human approves on the Mac, keys cannot land in the wrong window, the input method (Pinyin etc.) is handled, there is no shell tool, and file transfer is chunked, verified and resumable. See [Why MacPC Remote?](#why-macpc-remote)
+
 > **This is a third-party community project and is not affiliated with Anthropic or Apple.**
 
 > ## ⚠️ Read this first
@@ -19,6 +21,7 @@ This is the macOS sibling of [WinPC Remote](https://github.com/Tumi977/winpc-rem
 
 ## Table of contents
 
+0. [Why MacPC Remote?](#why-macpc-remote)
 1. [How it works](#1-how-it-works)
 2. [Quick start](#2-quick-start)
 3. [Mac setup](#3-mac-setup)
@@ -30,6 +33,27 @@ This is the macOS sibling of [WinPC Remote](https://github.com/Tumi977/winpc-rem
 9. [Troubleshooting](#9-troubleshooting)
 10. [Upgrading, rotating the token, uninstalling](#10-upgrading-rotating-the-token-uninstalling)
 11. [Project layout and license](#11-project-layout-and-license)
+
+---
+
+## Why MacPC Remote?
+
+Claude's built-in computer use runs inside the Claude desktop app and has no interface a remote Claude Code can call. MacPC Remote fills that gap for one specific job: **a Claude Code running on a server you reach over SSH, operating your own everyday Mac safely.**
+
+| | |
+|---|---|
+| **Nothing listens on the network** | The agent binds `127.0.0.1` only and the Mac *initiates* an SSH reverse tunnel to the server. No inbound port, no certificate to manage, works behind NAT. A Bearer token plus Host/Origin checks still protect the loopback port. |
+| **A human approves on the Mac** | In the default mode the first operation on an app, and the first write in a folder, shows an approval panel at the top of the screen. It is a non-activating panel in its own process: it never takes the focus away from the app being operated, and no click within 60 s counts as "deny". |
+| **Keys cannot land in the wrong window** | `type_text` / `press_key` take `expect_app` and `expect_handle`; when the frontmost app/window is not the declared one, **nothing is sent**. On a Mac this matters most in Terminal, where the agent's own windows live: activating Terminal usually lands in one of them. |
+| **Input that works on real Macs** | Retina-aware coordinates; text typed as Unicode with an active input method (Pinyin, Japanese, …) switched to an ASCII layout and back; paste that backs up and restores the **whole** clipboard; apps matched by bundle id even when their names are localized. |
+| **No shell tool** | The tool surface is screen + keyboard/mouse + files + transfer. Approving an app is still not a sandbox (see [6.2](#62-known-risks)), but the server does not hand the model a command-execution primitive by itself. |
+| **File access with guard rails** | Private keys detected by **content**; keychains, browser profiles, Mail, Messages, the TCC database, LaunchAgents, shell start-up files and histories, password-manager data and the agent's own folder are refused in every mode; executable/installable types (`.command .sh .app .pkg .dmg .scpt …`) cannot be written; symlinks are resolved before the check; writes are atomic and backed up. |
+| **Verified file transfer** | Chunked, sha256-verified, atomic and resumable (`macpc_cp.py`); the content never passes through the model context. |
+| **Emergency stop and audit log** | Mouse into the top-left corner → every input tool is refused until the agent is restarted on the Mac. Every call is logged (typed text only as length + first 20 characters). |
+| **Made for Claude Code** | A plugin (marketplace + `.mcp.json` + a Skill that teaches the safe workflow), installable next to its Windows sibling. |
+| **Tested on a real Mac** | 196 automated tests, plus a 53-check functional round run on a real Mac (TextEdit via Spotlight and the save sheet, the file tools and ten refusals, interrupted-and-resumed transfer, Chrome, the block-list in bypass mode, a killed tunnel). |
+
+**Limits:** macOS only on the target side (11+, tested on 12.7 Intel); it needs Python on the Mac and the Screen Recording + Accessibility permissions; the agent only works in an unlocked, logged-in session.
 
 ---
 
@@ -77,13 +101,40 @@ How it maps macOS onto the Windows design:
 
 ## 2. Quick start
 
-```text
-1. Mac:          clone the repo, open Terminal, run mac-agent/start-agent.sh   → note the token printed on first start
-2. Mac:          grant Terminal "Screen Recording" + "Accessibility", restart the agent         (3.2)
-3. Mac:          fill in mac-remote.config.json, run mac-agent/mac-remote.sh on                 (3.4, 4)
-4. Server:       put the token into ~/.claude/settings.json (env), install the plugin           (5)
-5. Claude Code:  /mcp shows macpc as connected → "use macpc's get_status to check my Mac"
+On the Mac, in Terminal:
+
+```bash
+git clone https://github.com/Tumi977/macpc-remote.git ~/macpc-remote
+cd ~/macpc-remote/mac-agent
+./start-agent.sh            # first run: creates the venv, prints the access token once -> note it, then Ctrl+C
+./install-commands.sh       # installs mac-remote-on / mac-remote-bypass / mac-remote-off
+cp mac-remote.config.example.json mac-remote.config.json   # fill in your server (chapter 4)
 ```
+
+Grant **Terminal** the *Screen Recording* and *Accessibility* permissions (3.2), then:
+
+```bash
+mac-remote-on               # agent + tunnel, each in its own Terminal window (keep them open)
+```
+
+On the Linux server:
+
+```bash
+# put the token into ~/.claude/settings.json:  { "env": { "MACPC_TOKEN": "<token>" } }
+claude plugin marketplace add Tumi977/macpc-remote
+claude plugin install macpc@macpc-remote
+```
+
+Start a new Claude Code session; `/mcp` shows `macpc` as connected. Then just ask: *"Use macpc to take a screenshot of my Mac and tell me what is on it."*
+
+Daily use on the Mac:
+
+| Command | What it does |
+|---|---|
+| `mac-remote-on` | Start (or restart) agent + tunnel; unapproved apps show an approval panel |
+| `mac-remote-bypass` | Same, without approval panels (block-lists still apply); for unattended work, then switch back |
+| `mac-remote-off` | Stop both |
+| mouse into the top-left corner | Emergency stop; resume with `mac-remote-on` |
 
 No Mac at hand? `--backend fake` lets you try the Linux side ([Testing](#8-testing)).
 
@@ -94,7 +145,7 @@ No Mac at hand? `--backend fake` lets you try the Linux side ([Testing](#8-testi
 ### 3.1 Get the code and start the agent
 
 ```bash
-git clone <this repository> ~/macpc-remote
+git clone https://github.com/Tumi977/macpc-remote.git ~/macpc-remote
 cd ~/macpc-remote/mac-agent
 ./start-agent.sh
 ```
@@ -227,7 +278,7 @@ Keep the token in user-level files only; never in a project `.mcp.json` that get
 ### 5.2 Install the plugin
 
 ```bash
-claude plugin marketplace add /path/to/macpc-remote
+claude plugin marketplace add Tumi977/macpc-remote     # or a local clone: /path/to/macpc-remote
 claude plugin install macpc@macpc-remote
 ```
 
@@ -397,11 +448,11 @@ MACPC_TOKEN=… MACPC_SSH=user@mac .venv/bin/python mac-agent/bin/functional_tes
 
 ## 10. Upgrading, rotating the token, uninstalling
 
-**Upgrade**: `git pull` on the Mac, then `./mac-remote.sh off && ./mac-remote.sh on`; on Linux `claude plugin marketplace update macpc-remote && claude plugin update macpc@macpc-remote`. Check `agent_version` in `get_status`.
+**Upgrade**: `git pull` on the Mac, then `mac-remote-on` (it restarts agent and tunnel); on Linux `claude plugin marketplace update macpc-remote && claude plugin update macpc@macpc-remote`. Check `agent_version` in `get_status`.
 
-**Rotate the token**: `./mac-remote.sh off`, set `"token": ""` in `config.json`, start again and note the new token; update `MACPC_TOKEN` on the server and restart Claude Code.
+**Rotate the token**: `mac-remote-off`, set `"token": ""` in `config.json`, start again and note the new token; update `MACPC_TOKEN` on the server and restart Claude Code.
 
-**Uninstall**: `claude plugin uninstall macpc@macpc-remote && claude plugin marketplace remove macpc-remote`; on the Mac `./mac-remote.sh off`, delete the folder, and remove Terminal from Screen Recording / Accessibility if nothing else needs them.
+**Uninstall**: `claude plugin uninstall macpc@macpc-remote && claude plugin marketplace remove macpc-remote`; on the Mac `mac-remote-off`, `rm ~/.local/bin/mac-remote-{on,bypass,off}`, delete the folder, and remove Terminal from Screen Recording / Accessibility if nothing else needs them.
 
 ---
 
